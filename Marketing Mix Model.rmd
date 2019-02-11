@@ -1,0 +1,403 @@
+---
+title: "Marketing Mix Panel Data Homework"
+author: "Chu, Hisham, Tamsir, Su"
+date: "February 7, 2019"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include = FALSE}
+library(data.table)
+counts = fread("C:/Users/mohdh/Documents/MSBA/Winter 2018/MKTG 3597/Homework/detailing_counts.csv")
+demo = fread("C:/Users/mohdh/Documents/MSBA/Winter 2018/MKTG 3597/Homework/detailing_demo.csv")
+
+```
+### Counts Information
+* id -- identifies the physician
+* scripts -- the number of new prescriptions ordered by the physician for the drug detailed
+* detailing -- the number of sales calls made to each physician per month
+
+### Demo Information
+* id --  identifies the physician
+* generalphys --  dummy for if doctor is a "general practitioner"
+* specialist --  dummy for if the physician is a specialist in the theraputic class for which the drug is intended
+* mean_samples --  the mean number of free drug samples given to the doctor over the sample period
+
+```{r, warning = FALSE}
+uniqueN(counts[, .(id, scripts, detailing)] ) / counts[,.N]  
+uniqueN(demo[, .(id)] ) / demo[,.N] 
+
+# Set key for demo table
+setkey(demo, id)
+
+counts[,months := rep(c(6:12,1:12,1:5), 2000)] # from June
+counts[,year := rep(c(1999,2000,2001), c(7,12,5))] # from 1999
+
+# Combine the month and the year to create a unique date column. 
+counts[, yrmn := year*100 + months]
+uniqueN(counts[, .(id, yrmn)] ) / counts[,.N] 
+
+# Set key for counts table
+setkey(counts, id, yrmn)
+
+sum(demo$generalphys == 1)
+sum(demo$specialist == 1)
+sum(demo$generalphys == 1 & demo$specialist == 1)
+sum(demo$generalphys == 0 & demo$specialist == 0)
+# There are doctors who are neither gen or spec. 
+
+```
+
+### Question 1
+
+```{r}
+# Merge counts onto demo dataset with aggregate columns
+doctors <- merge(demo, counts[, .(sumScripts = sum(scripts, na.rm = TRUE), 
+                                  sumDetailing = sum(detailing, na.rm = TRUE),
+                                  avgScripts = mean(scripts, na.rm = TRUE),
+                                  avgDetailing = mean(detailing, na.rm = TRUE)), 
+                              by = id])
+
+uniqueN(doctors[, .(id)] ) / doctors[,.N]
+setkey(doctors, id)
+
+# Generalists
+genphys <- doctors[doctors$generalphys == 1, mean(avgScripts)] * 24
+
+# Specialists
+spec <- doctors[doctors$specialist == 1, mean(avgScripts)] * 24
+
+``` 
+  
+> Average scripts per general physician: `r genphys`
+
+> Average scripts per specialist: `r spec`
+
+Histogram: 
+
+```{r}
+# Histogram for mean prescriptions issued monthly by each doctor
+hist(doctors[, log10(avgScripts + 1)],
+     breaks = 50,
+     main = "Average monthly prescriptions issued", 
+     xlab = "log10(Prescriptions Issued + 1)") 
+
+```
+
+### Question 2
+
+```{r}
+lm1 = lm(scripts ~ detailing, data = counts)
+summary(lm1)
+
+``` 
+
+A one unit increase in detailing is associated with a 0.93977 positive increase in scripts.
+
+### Question 3
+
+```{r, include = FALSE}
+library(stargazer)
+```
+
+```{r, warning = FALSE}
+counts[, details1 := shift(detailing, n=1L, "lag")]
+counts[, details2 := shift(detailing, n=2L, "lag")]
+counts[, details3 := shift(detailing, n=3L, "lag")]
+counts[, script1 := shift(scripts, n=1L, "lag")]
+counts[, script2 := shift(scripts, n=2L, "lag")]
+counts[, script3 := shift(scripts, n=3L, "lag")]
+```
+
+```{r}
+lm2 = lm(scripts ~ detailing + details1, data = counts)
+lm3 = lm(scripts ~ detailing + details1 + details2, data = counts)
+lm4 = lm(scripts ~ detailing + details1 + details2 + details3, data = counts)
+
+stargazer(lm1, lm2, lm3, lm4,
+          title = "Lag Detailing", type = "text", 
+          column.labels = c( "Current", "Lag1", "Lag2", "Lag3"),
+          df = FALSE, digits = 2, star.cutoffs = c(0.05,0.01,0.001)) 
+
+
+lm6 = lm(scripts~script1, data=counts)
+lm7 = lm(scripts~script1 + script2, data = counts)
+lm8 = lm(scripts~script1 + script2 + script3, data = counts)
+
+stargazer(lm6, lm7, lm8,
+          title="Lag Scripts", type="text", 
+          column.labels=c( "Lag1", "Lag2", "Lag3"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) 
+```
+
+Past detailing has a positive and significant association in prescribed scripts taking into account both individual and combined lag models. 
+
+Past scripts has a positive and significant association in current prescribed scripts taking into account both individual and combined lag models. 
+
+### Question 4
+```{r, include = FALSE}
+library(ggplot2)
+```
+
+Boxplot of average scripts for all physicians:
+
+```{r}
+boxplot(doctors$avgScripts, data = doctors,
+        main = "Physician Scriptwriting Data",
+        ylab = "Avg. Scripts")
+
+```
+
+```{r, warning = FALSE}
+ind_fix <- lm(scripts ~ factor(id) + detailing - 1, data = counts)
+counts[, yhat := ind_fix$fitted]
+```
+
+```{r}
+ggplot(data = counts[id <= 25, .(id, scripts, yhat)], 
+       aes(x = scripts, y = yhat, color = factor(id) ) ) +
+  geom_point() + geom_smooth(method = "lm", se = FALSE)
+
+summary(doctors$avgScripts)
+
+```
+
+>Yes, we see a large difference and variation in average presciribing activity across physicians. We can take this into account by creating a factor variable for each physician resulting in their own intercept. 
+
+```{r, include = FALSE}
+library(lfe)
+```
+
+```{r}
+fixedid1 = felm(scripts ~ script1 | id, data = counts)
+fixedid2 =felm(scripts~ script1 + script2 | id, data=counts)
+fixedid3 =felm(scripts~ script1 + script2 + script3 | id, data=counts )
+normalid1 =lm(scripts~ script1, data=counts )
+normalid2 =lm(scripts~ script1 + script2, data=counts )
+normalid3 =lm(scripts~ script1 + script2 + script3, data=counts )
+
+fixeddetail1 =felm(scripts~ detailing | id, data=counts )
+fixeddetail2 =felm(scripts~ detailing + details1 | id, data=counts )
+fixeddetail3 =felm(scripts~ detailing + details1 + details2 | id, data=counts )
+fixeddetail4 =felm(scripts~ detailing + details1 + 
+                     details2 + details3| id, data=counts )
+
+normaldetail1 =lm(scripts~ detailing, data=counts )
+normaldetail2 =lm(scripts~ detailing + details1, data=counts )
+normaldetail3 =lm(scripts~ detailing + details1 + details2, data=counts )
+normaldetail4 =lm(scripts~ detailing + details1 + 
+                    details2 + details3, data=counts )
+
+stargazer(fixedid1, fixedid2, fixedid3, normalid1, normalid2, normalid3,    
+          title="Fixed ID VS. Normal", type="text", 
+          column.labels=c( "Fixed ID1", "Fixed ID2", "Fixed ID3", 
+                           "NormalID1", "NormalID3", "NormalID2"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) 
+
+stargazer(fixeddetail1, fixeddetail2, fixeddetail3, 
+          fixeddetail4, normaldetail1, normaldetail2, 
+          normaldetail3, normaldetail4,     
+          title="Fixed ID VS. Normal", type="text", 
+          column.labels=c( "Fixed Detail2", "Fixed Detail2", "Fixed Detail3", 
+                           "Fixed Detail4", "Normal Detail1", "NormalID2", 
+                           "Normal Detail3", "Normal Detail4"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) 
+
+```
+
+> As a result of fixing each physician, the coefficients are still positively significant but less than the coefficients in models without fixed effects. This absorbs some of the variation and can account for differences in prescribing activities in physicians. Furthermore, the R-squared stat for the fixed effect models are much higher than the OLS models, indicating that the fixed effect model fits the data better.
+
+### Question 5
+
+``` {r, warning = FALSE}
+# Fixed time effects vs non time FE
+lm5.1f =felm(scripts ~ detailing + details1 + details2 
+             + details3 | yrmn, data=counts )
+lm5.1n =lm(scripts ~ detailing + details1 + 
+             details2 + details3, data=counts )
+
+stargazer(lm5.1f, lm5.1n,    
+          title="Fixed Time VS. Normal", type="text", 
+          column.labels=c( "Fixed Time", "Normal"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) 
+
+# Physician FE vs Time AND Physician FE
+lm5.2f = felm(scripts ~ detailing + details1 + 
+                details2 + details3 | id + yrmn, data = counts)
+lm5.2n = felm(scripts ~ detailing + details1 + 
+                details2 + details3 | id , data = counts)
+
+stargazer(lm5.2f, lm5.2n,    
+          title="Fixed Time VS. Normal", type="text", 
+          column.labels=c( "Fixed Time", "Normal"),
+          df=FALSE, digits=3, star.cutoffs = c(0.05,0.01,0.001))                                                                                                                                                                       
+``` 
+
+> When we include fixed time effects, we see that the coefficients are larger than an OLS regression. This is also controlling for seasonalities and other time related events.
+
+### Question 6
+
+The current model doesn't take into account the effects of providing free samples to individual physicians on prescription writing. If more free samples are given out to a physician and they also detailed the drug, omission of free samples would bias the coefficient of detailing and overestimate its effect on scripts.                                                                                                                                     
+
+### Question 7
+
+```{r}
+counts$newdata = counts$scripts - counts$script1 #Create first difference
+did = lm(newdata ~ detailing, data = counts)
+
+NoDiD =felm(scripts ~ detailing + details1 + 
+              details2 +details3 | id + yrmn, data=counts ) #significant
+fixedDiD =felm(newdata ~ detailing + details1 + 
+                 details2 +details3 | id + yrmn, data=counts ) #Insig
+
+stargazer(NoDiD, fixedDiD,    
+          title="Scripts vs Scripts Growth", type="text", 
+          column.labels=c( "Scripts", "Scripts Grwoth"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) 
+
+```
+
+In this dataset, using the difference in current scripts and 1 lagged scripts results in a change in number of scripts prescribed over time. We ran both regressions using the same model but with current and current-lagged1 scripts and found that the current-lagged1 resulted in insignificant coefficients. The problem is also that we are answering a different question where one is answering the rate of change over the last and the current scripts is the effects of detailing over the whole dataset/period of time. 
+
+### Question 8
+
+```{r}
+# Created 9 different models to test
+modela = felm(scripts ~ detailing + script1 | id, data=counts )
+modelb = felm(scripts ~ detailing + script1 + script2 | id, data=counts)
+modelc = felm(scripts ~ detailing + script1 + 
+                script2 + script3 | id, data=counts)
+
+modeld = felm(scripts ~ detailing + details1 | id, data=counts)
+modele = felm(scripts ~ detailing + details1 + details2 | id, data=counts)
+modelf = felm(scripts ~ detailing + details1 + 
+                details2 + details3 | id, data=counts)
+
+modelg = felm(scripts ~ detailing + script1 + details1 | id, data=counts)
+modelh = felm(scripts ~ detailing + script1 + 
+                script2 + details1 + details2 | id, data=counts)
+modeli = felm(scripts ~ detailing + script1 + script2 + script3 + 
+                details1 + details2 + details3 | id, data=counts)
+
+stargazer(modela, modelb, modelc,     
+          title="Model Comparison", type="text", 
+          column.labels=c( "ModelA", "ModelB", "ModelC"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+stargazer(modeld, modele, modelf,      
+          title="Model Comparison", type="text", 
+          column.labels=c( "ModelD", "ModelE", "Model F"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) 
+
+stargazer(modelg, modelh, modeli,     
+          title="Model Comparison", type="text", 
+          column.labels=c( "ModelG", "ModelH", "Model I"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) 
+```
+
+Moving forward, we will use models lm5.2f and modelh as we think these models approximate the true model the closest. Below, we will compare these two models side-by-side:
+
+```{r}
+lm5.2f = felm(scripts~ detailing + details1 + 
+                details2 + details3 | id + yrmn, data = counts )
+
+stargazer(lm5.2f, modelh,    
+          title="Fixed Time VS. Lag Scripts", type="text", 
+          column.labels=c( "Fixed Time", "Lag Scripts"),
+          df=FALSE, digits=3, star.cutoffs = c(0.05,0.01,0.001))
+
+```
+
+```{r, include = FALSE}
+# We chose these 2 models because we think there is an optimal mixture of lagged scripts and lagged detailing resulting in a better model fit. We suspect that past scripts and detailing can have a significant effect on current scripts and so we decided to use a combination of them as independent variables. We found that detailing lag 3 is insignificant when we add a 1 month lagged script variable. The Range of estimates is between 0.05 and .10 for Detailing. The standard errors have less variation in range across these models for detailing. We see that there is not much change in standard errors when adjusting for clustered SE and so we think we have estimated a good model that is close to the true model. We eventually chose modelh because we observed in modeli that when we go out to three lags with detailing and scripts, the coefficient for detailing lag 3 is insignificant and so we believe that we have a truer model just by using 2months of lagged details and scripts. 
+
+``` 
+
+We chose these two models because:
+
+* the data shows that past scriptwriting might have an influence on current scriptwriting
+* because we think scriptwriting over time should be controlled for using fixed effects, and
+* the data shows there is an optimal mix of lagged scripts and lagged detailing. The range of estimates for detailing is 0.05 - 0.09. This range of estimates is larger than the standard errors reported for both models (0.02)
+
+### Question 9
+
+``` {r}
+# We choose Modelh = Preferred and we interactived mean_samples with current detailing and also lagged detailing to increase the robustness of our analysis. 
+
+prefmodel <- felm(log(scripts + 1) ~ log(detailing + 1) + log(details1 + 1) + 
+                log(details2 + 1) + log(details3 + 1) | id + yrmn, data = counts)
+
+stargazer(prefmodel, 
+          title = "Regression Results", type = "text", 
+          column.labels = c("Preferred Model"),
+          df = FALSE, digits = 2, star.cutoffs = c(0.05, 0.01, 0.001)) 
+
+``` 
+  
+> Our model estimates that a 1% increase in detailing is associated with a 6% increase in current scripts. Past detailing also is positively associated with current scripts, ranging between 4% - 6%, depending on the lagged period.
+
+### Question 10
+
+```{r}
+time.cluster = felm(scripts ~ detailing + details1 + 
+                details2 + details3 | id + yrmn | 0 | yrmn, data=counts)
+
+id.cluster = felm(scripts ~ detailing + details1 + 
+                details2 + details3 | id + yrmn | 0 | id, data=counts)
+
+summary(lm5.2f)
+summary(lm5.2f, robust = TRUE)
+
+stargazer(time.cluster, id.cluster,      
+          title="Model Comparison", type="text", 
+          column.labels = c("Cluster Time", "Cluster ID"),
+          df=FALSE, digits = 3, star.cutoffs = c(0.05,0.01,0.001))
+
+```
+
+```{r, include = FALSE}  
+# The model fits for both clustered physician and clustered time but with clustered time, we noticed a slight decrease in standard errors and as a result, we will proceed with modelm. We think that both models with clustered time or clustered id are both fine but in this dataset, the most appropriate method is to cluster by time as it reduces standard error. 
+  
+``` 
+  
+* When we use robust standard errors, we observe an increase in standard errors (vs the normal SE), while the coefficients are still significant.
+* After clustering SE by time and ID, we observe that the SE clustered by time is smaller relative to the SE clustered by ID. 
+
+> Even though the SE clustered by time is smaller, we know that there are different groups of physicians within the given dataset. Therefore, we will cluster by ID rather than time.
+
+### Question 11
+
+```{r}
+dt = merge(counts, demo, by = 'id')
+
+general = felm(scripts ~ detailing + details1 + details2 
+              + details3 | id + yrmn | 0 | id, data=subset(dt, generalphys == 1))
+
+spec = felm(scripts ~ detailing + details1 + details2 
+              + details3 | id + yrmn | 0 | id, data=subset(dt, specialist == 1))
+  
+stargazer(general, spec,      
+          title="Model Comparison", type="text", 
+          column.labels=c( "GenPhys", "Specialists"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+``` 
+  
+* After subsetting the data into general physicians and specialists, we observe a significant and positive coefficient of detailing for specialists, but an insignificant coefficient for general physicians. We conclude that there is a positive association between detailing and scripts for specialists, but not for genral physicians.
+
+* Other physician characteristics given in the dataset include mean samples given to physicians. However, the mean sample does not give us any relevant information w.r.t. time (of when the samples were given). Therefore, we did not include mean samples in our model.
+  
+### Question 12
+
+General physicians have a lower number of average and total scripts compared to specialists whom have higher numbers of scripts. As a result, a marketer should focus their detailing and marketing efforts on specialists. 
+
+Detailing is an effective marketing tool. However, it is much more effective when you target specialists but less effective on generalists. The impact has a positive association with specialists but less so on generalists based on our dataset. We are confident that targeting specialists will have a bigger impact than generalists. 
+
+Some sources of doubt may include unobserved variables that might affect the impact of detailing. These could include free samples given over time, salesperson competence and activity, competitive environment... The list is endless. 
+
+> Since specialists have a positive response to detailing, we would recommend the sales team to target specialists before targeting general physicians. However, due to the limitations of the given dataset, we would have to dive deeper into other forces that could influence physician's prescription writing behavior for this particular drug before investing further in this detailing marketing campaign.
