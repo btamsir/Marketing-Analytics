@@ -7,4 +7,4 @@ Marketing Mix Model
   time lagged variables, and fixed time effects / fixed physician. 
 
 Expedia Randomization
-  Expedia "claims" that they truely randomized a subset of people without postional ranking inputs. This project details the robustness of   claims. 
+  Expedia "claims" that they truely randomized a subset of people without postional ranking inputs. This project details the robustness of   those claims. 
